@@ -6,9 +6,9 @@ Chat with state-of-the-art AI models (GPT-5, Claude Sonnet 4, o3, and more) dire
 
 ---
 
-## Setup
+## Quick Start
 
-### Prerequisites
+### 1. Prerequisites
 
 | Requirement | How to get it |
 |------------|---------------|
@@ -17,52 +17,116 @@ Chat with state-of-the-art AI models (GPT-5, Claude Sonnet 4, o3, and more) dire
 | **Telegram User ID** | Message [@userinfobot](https://t.me/userinfobot) → copy the numeric ID |
 | **GitHub Token** | [github.com/settings/tokens](https://github.com/settings/tokens) — create a token with Copilot access |
 
-### Install & Configure
+### 2. Install
+
+Install globally from npm:
 
 ```bash
-git clone https://github.com/your-username/co-assistant.git
-cd co-assistant
-npm install
+npm install -g @hmawla/co-assistant
 ```
+
+### 3. Create a project directory
+
+Co-Assistant needs a working directory to store your configuration, plugins, and data:
+
+```bash
+mkdir my-assistant && cd my-assistant
+```
+
+### 4. Set up
 
 Run the interactive setup wizard — it walks you through every credential and preference:
 
 ```bash
-npx tsx src/cli/index.ts setup
+co-assistant setup
 ```
 
-The wizard creates your `.env` file and `config.json`. You can re-run it at any time to update settings.
+The wizard creates your `.env` file and `config.json`. Re-run it anytime to update settings.
 
-### Personalise
-
-Two markdown files control how the AI behaves and who it knows you are:
-
-| File | Purpose | Committed? |
-|------|---------|------------|
-| `personality.md` | Defines the assistant's tone, style, and behaviour | ✅ Yes |
-| `user.md` | Your personal profile (name, role, timezone, preferences) | ❌ Gitignored |
-
-**Set up your user profile** (copy the template and fill in your details):
+### 5. Start
 
 ```bash
-cp user.md.example user.md
-```
-
-Both files are read fresh on each message — edit them anytime without restarting.
-
-### Start
-
-```bash
-npx tsx src/cli/index.ts start
+co-assistant start
 ```
 
 Open Telegram, find your bot, and send a message. That's it.
 
-**Verbose mode** (shows incoming/outgoing messages and debug logs in the terminal):
+**Verbose mode** (shows messages and debug logs in the terminal):
 
 ```bash
+co-assistant start -v
+```
+
+---
+
+## Installation Methods
+
+### Global install from npm (recommended)
+
+Works on **Linux**, **macOS**, and **Windows**:
+
+```bash
+npm install -g @hmawla/co-assistant
+```
+
+After install, the `co-assistant` command is available everywhere. Create a directory for your instance and run `co-assistant setup` inside it.
+
+> **Windows note:** If `co-assistant` is not found after install, ensure your npm global bin
+> directory is in your `PATH`. Run `npm config get prefix` and add the resulting path + `/bin`
+> (or `\bin` on Windows) to your system PATH.
+
+### Run without installing (npx)
+
+Try it out without a global install:
+
+```bash
+npx @hmawla/co-assistant setup
+npx @hmawla/co-assistant start
+```
+
+### Install from source
+
+For development or customisation:
+
+```bash
+git clone https://github.com/hmawla/co-assistant.git
+cd co-assistant
+npm install
+```
+
+Run commands via tsx during development:
+
+```bash
+npx tsx src/cli/index.ts setup
 npx tsx src/cli/index.ts start -v
 ```
+
+Or build first, then run the compiled output:
+
+```bash
+npm run build
+node dist/cli/index.js start
+```
+
+---
+
+## Personalise
+
+Two markdown files control how the AI behaves and who it knows you are:
+
+| File | Purpose | Included in package? |
+|------|---------|---------------------|
+| `personality.md` | Defines the assistant's tone, style, and behaviour | ✅ Yes — edit to customise |
+| `user.md` | Your personal profile (name, role, timezone, preferences) | Template only (`user.md.example`) |
+
+**Set up your user profile:**
+
+```bash
+cp user.md.example user.md
+# Edit user.md with your details
+```
+
+Both files are read fresh on each message — edit them anytime without restarting. If the files don't exist in your working directory, the assistant works fine without them.
 
 ---
 
@@ -70,17 +134,22 @@ npx tsx src/cli/index.ts start -v
 
 For running Co-Assistant permanently on a server (VPS, Raspberry Pi, etc.).
 
-### 1. Build
+### Linux — systemd (recommended)
 
 ```bash
-npm run build
+# Install globally on the server
+npm install -g @hmawla/co-assistant
+
+# Create a dedicated directory
+sudo mkdir -p /opt/co-assistant
+sudo chown $USER:$USER /opt/co-assistant
+cd /opt/co-assistant
+
+# Set up credentials
+co-assistant setup
 ```
 
-This compiles TypeScript to `dist/` via tsup.
-
-### 2. Run with systemd (recommended for Linux)
-
-Create a service file:
+Create a systemd service:
 
 ```bash
 sudo nano /etc/systemd/system/co-assistant.service
@@ -95,8 +164,8 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=your-username
-WorkingDirectory=/path/to/co-assistant
-ExecStart=/usr/bin/node dist/index.js start
+WorkingDirectory=/opt/co-assistant
+ExecStart=/usr/bin/co-assistant start
 Restart=always
 RestartSec=10
 Environment=NODE_ENV=production
@@ -105,7 +174,7 @@ Environment=NODE_ENV=production
 WantedBy=multi-user.target
 ```
 
-Enable and start:
+> **Tip:** Run `which co-assistant` to find the exact path for `ExecStart` if it differs.
 
 ```bash
 sudo systemctl daemon-reload
@@ -121,30 +190,102 @@ sudo journalctl -u co-assistant -f    # Live logs
 sudo systemctl restart co-assistant   # Restart after config changes
 ```
 
-### 3. Alternative: PM2
+### macOS — launchd
 
 ```bash
-npm install -g pm2
-pm2 start dist/index.js --name co-assistant -- start
+npm install -g @hmawla/co-assistant
+mkdir -p ~/co-assistant && cd ~/co-assistant
+co-assistant setup
+```
+
+Create a launch agent:
+
+```bash
+nano ~/Library/LaunchAgents/com.co-assistant.plist
+```
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.co-assistant</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/co-assistant</string>
+    <string>start</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/your-username/co-assistant</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/Users/your-username/co-assistant/co-assistant.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/your-username/co-assistant/co-assistant.log</string>
+</dict>
+</plist>
+```
+
+> **Tip:** Run `which co-assistant` and replace `/usr/local/bin/co-assistant` with the actual path.
+
+```bash
+launchctl load ~/Library/LaunchAgents/com.co-assistant.plist
+```
+
+### Windows — Task Scheduler or PM2
+
+**Option A: PM2 (cross-platform, recommended for Windows)**
+
+```powershell
+npm install -g @hmawla/co-assistant pm2
+mkdir C:\co-assistant
+cd C:\co-assistant
+co-assistant setup
+pm2 start co-assistant -- start
+pm2 save
+pm2-startup install    # auto-start on boot
+```
+
+**Option B: Task Scheduler**
+
+1. Open Task Scheduler → Create Basic Task
+2. Set trigger to "When the computer starts"
+3. Action: Start a program
+   - Program: `co-assistant` (or full path from `where co-assistant`)
+   - Arguments: `start`
+   - Start in: `C:\co-assistant`
+4. Check "Run whether user is logged on or not"
+
+### Any OS — PM2
+
+PM2 works the same way on Linux, macOS, and Windows:
+
+```bash
+npm install -g @hmawla/co-assistant pm2
+mkdir my-assistant && cd my-assistant
+co-assistant setup
+pm2 start co-assistant -- start
 pm2 save
 pm2 startup    # generates command to auto-start on boot
 ```
 
-### 4. Alternative: Docker
+### Docker
 
 ```dockerfile
 FROM node:20-slim
 WORKDIR /app
-COPY package*.json ./
-RUN npm ci --production
-COPY dist/ dist/
+RUN npm install -g @hmawla/co-assistant
+COPY .env config.json personality.md ./
 COPY plugins/ plugins/
 COPY heartbeats/ heartbeats/
-COPY personality.md ./
-COPY config.json .env ./
 # Optional — only if you created a user.md:
 # COPY user.md ./
-CMD ["node", "dist/index.js", "start"]
+CMD ["co-assistant", "start"]
 ```
 
 ```bash
@@ -170,39 +311,24 @@ All configured via `.env` (the setup wizard handles this):
 
 ---
 
-## CLI Commands
-
-**How to run commands:**
-
-```bash
-# During development (runs TypeScript directly):
-npx tsx src/cli/index.ts setup
-npx tsx src/cli/index.ts start -v
-
-# After building (npm run build):
-node dist/cli/index.js setup
-node dist/cli/index.js start
-
-# After global install (npm install -g .):
-co-assistant setup
-co-assistant start
-```
+## CLI Reference
 
 | Command | Description |
 |---------|-------------|
-| `setup` | Interactive setup wizard |
-| `start` | Start the bot (`-v` for verbose) |
-| `model` | Show current model |
-| `model <name>` | Switch AI model |
-| `plugin list` | List discovered plugins |
-| `plugin enable <name>` | Enable a plugin |
-| `plugin disable <name>` | Disable a plugin |
-| `plugin configure <name>` | Set up plugin credentials |
-| `heartbeat list` | List heartbeat events |
-| `heartbeat add` | Create a new heartbeat event |
-| `heartbeat remove <name>` | Delete a heartbeat event |
-| `heartbeat run [name]` | Test heartbeat(s) on demand |
-| `status` | Show bot and system status |
+| `co-assistant setup` | Interactive setup wizard |
+| `co-assistant start` | Start the bot |
+| `co-assistant start -v` | Start with verbose logging |
+| `co-assistant model` | Show current AI model |
+| `co-assistant model <name>` | Switch AI model |
+| `co-assistant plugin list` | List discovered plugins |
+| `co-assistant plugin enable <name>` | Enable a plugin |
+| `co-assistant plugin disable <name>` | Disable a plugin |
+| `co-assistant plugin configure <name>` | Set up plugin credentials |
+| `co-assistant heartbeat list` | List heartbeat events |
+| `co-assistant heartbeat add` | Create a new heartbeat event |
+| `co-assistant heartbeat remove <name>` | Delete a heartbeat event |
+| `co-assistant heartbeat run [name]` | Test heartbeat(s) on demand |
+| `co-assistant status` | Show bot and system status |
 
 ---
 
@@ -224,12 +350,12 @@ Models are grouped by rate consumption (requests per prompt):
 
 | Tier | Models | Rate |
 |------|--------|------|
-| **Premium** | `gpt-5`, `o3`, `claude-opus-4` | 3x |
-| **Standard** | `gpt-4.1`, `gpt-4o`, `o4-mini`, `claude-sonnet-4` | 1x |
-| **Low** | `gpt-4o-mini`, `gpt-4.1-mini`, `gpt-5-mini`, `o3-mini`, `claude-haiku-4.5` | 0.33x |
-| **Free** | `gpt-4.1-nano` | 0x |
+| **Premium** | `gpt-5`, `o3`, `claude-opus-4` | 3× |
+| **Standard** | `gpt-4.1`, `gpt-4o`, `o4-mini`, `claude-sonnet-4` | 1× |
+| **Low** | `gpt-4o-mini`, `gpt-4.1-mini`, `gpt-5-mini`, `o3-mini`, `claude-haiku-4.5` | 0.33× |
+| **Free** | `gpt-4.1-nano` | 0× |
 
-Switch via CLI (`co-assistant model claude-sonnet-4`) or in the setup wizard.
+Switch anytime: `co-assistant model claude-sonnet-4`
 
 ---
 
@@ -237,16 +363,16 @@ Switch via CLI (`co-assistant model claude-sonnet-4`) or in the setup wizard.
 
 ### `personality.md` — How the AI behaves
 
-Defines the assistant's identity, tone, formatting rules, and boundaries. This file is committed to the repo so your team shares the same base personality. Edit it to change the assistant's style.
+Defines the assistant's identity, tone, formatting rules, and boundaries. Shipped with a sensible default. Edit it to change the assistant's style — changes apply on the next message.
 
 ### `user.md` — Who you are
 
-Contains your personal details so the AI can address you correctly and understand your context. This file is gitignored — each user creates their own from the template.
+Your personal details (name, title, timezone, role, preferences) so the AI can address you correctly and understand your context. Copy `user.md.example` to get started.
 
-Both files are injected as system-level context on every message. The AI sees:
-1. Personality instructions (how to behave)
-2. User profile (who it's talking to)
-3. Your actual message
+Both files are injected as system-level context on every message:
+1. **Personality** — how the assistant should behave
+2. **User profile** — who it's talking to
+3. **Your message** — the actual prompt
 
 ---
 
@@ -262,15 +388,15 @@ Both files are injected as system-level context on every message. The AI sees:
 ### Enable a Plugin
 
 ```bash
-npx tsx src/cli/index.ts plugin enable gmail
-npx tsx src/cli/index.ts plugin configure gmail
+co-assistant plugin enable gmail
+co-assistant plugin configure gmail
 ```
 
 The configure command walks you through setting up OAuth credentials. For Google plugins, it includes an automated local OAuth flow to obtain refresh tokens.
 
 ### Create Your Own Plugin
 
-Create a directory under `plugins/` with:
+Create a directory under `plugins/` in your working directory:
 
 ```
 plugins/my-plugin/
@@ -342,15 +468,8 @@ Tool names are automatically prefixed with the plugin ID (e.g., `my-plugin_do_so
 
 Heartbeats are scheduled AI prompts that run every N minutes. Use them for periodic checks like "do I have unread emails that need a reply?"
 
-### Setup
-
 1. Set the interval in `.env`: `HEARTBEAT_INTERVAL_MINUTES=5`
-2. Add a heartbeat event:
-
-```bash
-npx tsx src/cli/index.ts heartbeat add
-```
-
+2. Add a heartbeat event: `co-assistant heartbeat add`
 3. Or trigger manually via Telegram: `/heartbeat`
 
 Heartbeat prompts are stored as `.heartbeat.md` files in the `heartbeats/` directory. They support deduplication via `{{DEDUP_STATE}}` placeholders and `<!-- PROCESSED: id1, id2 -->` markers.
@@ -360,24 +479,20 @@ Heartbeat prompts are stored as `.heartbeat.md` files in the `heartbeats/` direc
 ## Architecture
 
 ```
-co-assistant/
-├── src/
-│   ├── ai/            # Copilot SDK client, session pool, model registry
-│   ├── bot/           # Telegraf bot, handlers, middleware (auth, logging)
-│   ├── cli/           # Commander.js CLI (setup, start, plugin, model, heartbeat)
-│   ├── core/          # App orchestrator, config, logger, heartbeat, GC
-│   ├── plugins/       # Plugin registry, manager, sandbox, credentials
-│   ├── storage/       # SQLite database, migrations, repositories
-│   └── utils/         # Google OAuth helper
-├── plugins/           # Installed plugins (gmail, google-calendar)
-├── heartbeats/        # Heartbeat prompt files (.heartbeat.md)
-├── data/              # SQLite database (auto-created)
-├── personality.md     # AI personality & behaviour instructions
-├── user.md            # Your personal profile (gitignored)
-├── user.md.example    # User profile template
-├── config.json        # Plugin & runtime configuration (gitignored)
-└── config.json.example
+your-project/                   # Your working directory
+├── .env                        # Credentials (auto-created by setup)
+├── config.json                 # Plugin & runtime config (auto-created)
+├── personality.md              # AI personality instructions
+├── user.md                     # Your personal profile
+├── plugins/                    # Your plugins (gmail, google-calendar, custom)
+│   ├── gmail/
+│   └── google-calendar/
+├── heartbeats/                 # Heartbeat prompt files
+├── data/                       # SQLite database (auto-created)
+└── node_modules/               # If installed locally
 ```
+
+When installed globally, the package provides the `co-assistant` binary. All runtime files (config, data, plugins, heartbeats) live in whichever directory you run the command from.
 
 **Key internals:**
 
@@ -388,6 +503,26 @@ co-assistant/
 - **Garbage collector** — Prunes old conversations (30 days) and health records (7 days); logs memory stats
 - **Heartbeat deduplication** — State files track processed item IDs to avoid duplicate notifications
 - **Reply threading** — Each AI response threads back to the user's original Telegram message
+
+---
+
+## Updating
+
+```bash
+npm update -g @hmawla/co-assistant
+```
+
+Your `.env`, `config.json`, `user.md`, plugins, and heartbeats are unaffected — they live in your working directory, not in the package.
+
+---
+
+## Uninstall
+
+```bash
+npm uninstall -g @hmawla/co-assistant
+```
+
+Your working directory and data are preserved. Delete it manually if no longer needed.
 
 ---
 
