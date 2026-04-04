@@ -1,0 +1,28 @@
+# Source (only dist/ is published)
+src/
+tsconfig.json
+tsup.config.ts
+
+# Config & secrets
+.env
+.env.*
+config.json
+user.md
+
+# Runtime data
+data/
+heartbeats/*.state.json
+*.db
+*.db-wal
+*.db-shm
+
+# Dev / editor
+.vscode/
+.idea/
+*.tsbuildinfo
+coverage/
+.nyc_output/
+
+# OS
+.DS_Store
+Thumbs.db
