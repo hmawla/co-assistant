@@ -1,6 +1,6 @@
 {
   "name": "@hmawla/co-assistant",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "AI-powered Telegram personal assistant using GitHub Copilot SDK",
   "type": "module",
   "main": "dist/index.js",
