@@ -281,17 +281,20 @@ export class PluginManager {
     // 5. Build context & initialise
     const context = this.buildPluginContext(pluginId, creds);
 
-    const initResult = await this.sandbox.safeExecute(
+    await this.sandbox.safeExecute(
       pluginId,
       "initialize",
       () => plugin.initialize(context),
     );
 
-    // safeExecute returns undefined on failure
-    if (initResult === undefined && manifest.requiredCredentials.length > 0) {
+    // safeExecute resets failure count on success, increments on failure.
+    // We check the count rather than the return value because void-returning
+    // functions (like initialize) resolve to `undefined` on success, which
+    // is indistinguishable from the `undefined` safeExecute returns on error.
+    if (this.sandbox.getFailureCount(pluginId) > 0) {
       this.logger.warn(
         { pluginId },
-        `Plugin "${pluginId}" initialize() did not succeed — marking as error`,
+        `Plugin "${pluginId}" initialize() failed — check credentials and plugin health`,
       );
     }
 
