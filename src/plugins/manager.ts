@@ -17,8 +17,8 @@
  */
 
 import path from "node:path";
-import { existsSync } from "node:fs";
-import { register } from "tsx/esm/api";
+import { existsSync, statSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 import type { Logger } from "pino";
 import { createChildLogger } from "../core/logger.js";
 import type { PluginRegistry } from "./registry.js";
@@ -34,6 +34,64 @@ import type {
   PluginStatus,
   ToolDefinition,
 } from "./types.js";
+
+const pluginLogger = createChildLogger("plugins:manager");
+
+// ---------------------------------------------------------------------------
+// Plugin compilation helper
+// ---------------------------------------------------------------------------
+
+/**
+ * Compile a TypeScript plugin entry point to a single ESM JavaScript file
+ * using esbuild. Local relative imports (e.g. `./auth.js` → `./auth.ts`)
+ * are bundled into the output while node_modules packages stay external.
+ *
+ * The compiled file is cached next to the source as `index.compiled.mjs`.
+ * It is only rebuilt when the source directory has been modified.
+ *
+ * This avoids all Node.js ESM loader hook issues (tsx register/tsImport)
+ * that break across different Node versions (especially Node 24+).
+ */
+async function compilePlugin(tsEntryPath: string): Promise<string> {
+  const outfile = tsEntryPath.replace(/\.ts$/, ".compiled.mjs");
+  const pluginDir = path.dirname(tsEntryPath);
+
+  // Check if compiled version exists and is reasonably fresh.
+  // We compare against the directory mtime — any file change in the
+  // plugin dir bumps it, triggering a recompile.
+  if (existsSync(outfile)) {
+    try {
+      const compiledMtime = statSync(outfile).mtimeMs;
+      const dirMtime = statSync(pluginDir).mtimeMs;
+      if (compiledMtime >= dirMtime) {
+        pluginLogger.debug({ outfile }, "Using cached compiled plugin");
+        return outfile;
+      }
+    } catch {
+      // If stat fails, just recompile
+    }
+  }
+
+  pluginLogger.debug({ tsEntryPath, outfile }, "Compiling plugin with esbuild");
+
+  // esbuild is available as a transitive dependency via tsx
+  const esbuild = await import("esbuild");
+  await esbuild.build({
+    entryPoints: [tsEntryPath],
+    bundle: true,
+    format: "esm",
+    platform: "node",
+    target: "node20",
+    outfile,
+    // Externalize all bare-specifier packages (node_modules) but bundle
+    // local relative imports (./auth.js → ./auth.ts, ./tools.js, etc.)
+    packages: "external",
+    logLevel: "warning",
+  });
+
+  pluginLogger.debug({ outfile }, "Plugin compiled successfully");
+  return outfile;
+}
 
 // ---------------------------------------------------------------------------
 // PluginManager
@@ -159,17 +217,13 @@ export class PluginManager {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let mod: any;
     try {
-      // Register tsx's ESM loader hooks so that .ts files and their sub-imports
-      // (e.g. ./auth.js → ./auth.ts) are resolved correctly at runtime.
-      // The unregister handle is called immediately after import to avoid
-      // polluting the global loader for the rest of the process.
+      // For .ts plugins, compile to a single .mjs bundle using esbuild.
+      // This resolves all local sub-imports (./auth.js → ./auth.ts) at
+      // compile time, producing a self-contained ESM file that works with
+      // native import() on any Node version without loader hooks.
       if (pluginPath.endsWith(".ts")) {
-        const unregister = register();
-        try {
-          mod = await import(pluginPath);
-        } finally {
-          unregister();
-        }
+        const compiledPath = await compilePlugin(pluginPath);
+        mod = await import(pathToFileURL(compiledPath).href);
       } else {
         mod = await import(pluginPath);
       }

@@ -9,7 +9,7 @@ export default defineConfig({
   target: "node20",
   splitting: false,
   outDir: "dist",
-  // tsx uses CJS require("fs") internally — must stay external to avoid
-  // "Dynamic require of fs is not supported" in the ESM bundle.
-  external: ["tsx"],
+  // esbuild is dynamically imported at runtime for plugin compilation —
+  // it must stay external to avoid bundling its platform-specific binary.
+  external: ["esbuild"],
 });
