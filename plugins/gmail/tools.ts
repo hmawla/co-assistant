@@ -417,5 +417,149 @@ export function createGmailTools(auth: GmailAuth, logger: Logger): ToolDefinitio
     },
   };
 
-  return [searchEmails, readEmail, sendEmail, getThread];
+  // -----------------------------------------------------------------------
+  // search_threads  (single-call inbox analysis)
+  // -----------------------------------------------------------------------
+  const searchThreads: ToolDefinition = {
+    name: "search_threads",
+    description:
+      "Search Gmail and return results grouped by thread. Each thread includes " +
+      "ALL messages (including your sent replies) with isSent flags, so you can " +
+      "tell at a glance whether you already replied. Ideal for inbox review — " +
+      "returns everything in a single call.",
+    parameters: z.object({
+      /** Gmail search query (e.g. "in:inbox", "from:alice"). */
+      query: z.string().describe("Gmail search query"),
+      /** Maximum threads to return (default 5, max 20). */
+      maxThreads: z
+        .number()
+        .int()
+        .min(1)
+        .max(20)
+        .optional()
+        .default(5)
+        .describe("Maximum number of threads to return"),
+      /** When true, includes the full decoded body of the latest message in
+       *  each thread. When false, only snippets are returned. */
+      includeLatestBody: z
+        .boolean()
+        .optional()
+        .default(false)
+        .describe("Include full body of the latest message per thread"),
+    }),
+
+    handler: async (args) => {
+      try {
+        const query = args.query as string;
+        const maxThreads = (args.maxThreads as number | undefined) ?? 5;
+        const includeLatestBody = (args.includeLatestBody as boolean | undefined) ?? false;
+        logger.debug({ query, maxThreads, includeLatestBody }, "search_threads called");
+
+        // Step 1 — List thread IDs matching the query.
+        const params = new URLSearchParams({
+          q: query,
+          maxResults: String(maxThreads),
+        });
+        const listRes = await fetch(`${GMAIL_API}/threads?${params}`, {
+          headers: await authHeaders(auth),
+        });
+
+        if (!listRes.ok) {
+          const errText = await listRes.text();
+          logger.error({ status: listRes.status, errText }, "Gmail threads search failed");
+          return `Error searching threads (${listRes.status}): ${errText}`;
+        }
+
+        const listData = (await listRes.json()) as {
+          threads?: Array<{ id: string; snippet: string }>;
+          resultSizeEstimate?: number;
+        };
+
+        if (!listData.threads?.length) {
+          return { threadCount: 0, threads: [] };
+        }
+
+        // Step 2 — Fetch each thread. Use "full" format for the latest
+        // message body when requested, "metadata" otherwise.
+        const format = includeLatestBody ? "full" : "metadata";
+        const headers = await authHeaders(auth);
+        const threads = await Promise.all(
+          listData.threads.map(async (t) => {
+            const url =
+              `${GMAIL_API}/threads/${t.id}?format=${format}` +
+              "&metadataHeaders=Subject&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Date";
+            const res = await fetch(url, { headers });
+
+            if (!res.ok) {
+              return { threadId: t.id, error: `Failed to fetch (${res.status})` };
+            }
+
+            const data = (await res.json()) as {
+              id: string;
+              messages: Array<{
+                id: string;
+                labelIds: string[];
+                snippet: string;
+                payload: {
+                  headers: Array<{ name: string; value: string }>;
+                  body?: { data?: string };
+                  parts?: Array<Record<string, unknown>>;
+                  mimeType?: string;
+                };
+              }>;
+            };
+
+            // Build a compact summary for each message in the thread.
+            const messages = data.messages.map((msg) => {
+              const result: Record<string, unknown> = {
+                id: msg.id,
+                from: getHeader(msg.payload.headers, "From"),
+                to: getHeader(msg.payload.headers, "To"),
+                date: getHeader(msg.payload.headers, "Date"),
+                snippet: msg.snippet,
+                isSent: msg.labelIds?.includes("SENT") ?? false,
+              };
+              return result;
+            });
+
+            // The last message in the array is the most recent.
+            const latest = data.messages[data.messages.length - 1];
+            const lastIsSent = latest?.labelIds?.includes("SENT") ?? false;
+            const subject = getHeader(
+              data.messages[0].payload.headers,
+              "Subject",
+            );
+
+            const thread: Record<string, unknown> = {
+              threadId: data.id,
+              subject,
+              messageCount: messages.length,
+              lastMessageIsSent: lastIsSent,
+              messages,
+            };
+
+            // Only decode the body for the latest message when requested.
+            if (includeLatestBody && latest) {
+              thread.latestBody = extractBody(
+                latest.payload as Record<string, unknown>,
+              );
+            }
+
+            return thread;
+          }),
+        );
+
+        return {
+          threadCount: threads.length,
+          threads,
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        logger.error({ error: message }, "search_threads error");
+        return `Error searching threads: ${message}`;
+      }
+    },
+  };
+
+  return [searchEmails, readEmail, sendEmail, getThread, searchThreads];
 }
