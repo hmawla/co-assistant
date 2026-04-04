@@ -1,5 +1,7 @@
 # 🤖 Co-Assistant
 
+**[Homepage](https://hmawla.github.io/co-assistant)** · **[npm](https://www.npmjs.com/package/@hmawla/co-assistant)** · **[Plugin Guide](docs/plugin-development.md)** · **[CLI Reference](docs/cli-reference.md)**
+
 AI-powered Telegram personal assistant built on the GitHub Copilot SDK.
 
 Chat with state-of-the-art AI models (GPT-5, Claude Sonnet 4, o3, and more) directly from Telegram. Extend it with plugins for Gmail, Google Calendar, or build your own.
@@ -385,7 +387,7 @@ Both files are injected as system-level context on every message:
 
 | Plugin | Tools provided |
 |--------|---------------|
-| **Gmail** | Search emails, read email, send email, send reply |
+| **Gmail** | Search threads, search emails, read email, send email, get thread |
 | **Google Calendar** | List events, create event, update event, delete event |
 
 ### Install Plugins

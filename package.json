@@ -55,7 +55,7 @@
   "bugs": {
     "url": "https://github.com/hmawla/co-assistant/issues"
   },
-  "homepage": "https://github.com/hmawla/co-assistant#readme",
+  "homepage": "https://hmawla.github.io/co-assistant",
   "engines": {
     "node": ">=20.0.0"
   },
