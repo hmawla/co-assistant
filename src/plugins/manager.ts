@@ -18,7 +18,7 @@
 
 import path from "node:path";
 import { existsSync, statSync } from "node:fs";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import type { Logger } from "pino";
 import { createChildLogger } from "../core/logger.js";
 import type { PluginRegistry } from "./registry.js";
@@ -42,9 +42,29 @@ const pluginLogger = createChildLogger("plugins:manager");
 // ---------------------------------------------------------------------------
 
 /**
+ * Walk up from the current file to find the nearest `node_modules` directory.
+ * This allows plugins to reference packages (zod, googleapis, etc.) that are
+ * installed alongside co-assistant, even when the user's cwd has no
+ * node_modules of its own.
+ */
+function findNodeModules(): string | null {
+  const thisFile = fileURLToPath(import.meta.url);
+  let dir = path.dirname(thisFile);
+  for (let i = 0; i < 10; i++) {
+    const candidate = path.join(dir, "node_modules");
+    if (existsSync(candidate)) return candidate;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
+}
+
+/**
  * Compile a TypeScript plugin entry point to a single ESM JavaScript file
- * using esbuild. Local relative imports (e.g. `./auth.js` → `./auth.ts`)
- * are bundled into the output while node_modules packages stay external.
+ * using esbuild. All imports — local (./auth.js → ./auth.ts) and
+ * third-party (zod, googleapis) — are bundled into the output so the
+ * compiled plugin is fully self-contained.
  *
  * The compiled file is cached next to the source as `index.compiled.mjs`.
  * It is only rebuilt when the source directory has been modified.
@@ -74,7 +94,11 @@ async function compilePlugin(tsEntryPath: string): Promise<string> {
 
   pluginLogger.debug({ tsEntryPath, outfile }, "Compiling plugin with esbuild");
 
-  // esbuild is available as a transitive dependency via tsx
+  // Resolve the package's own node_modules so plugins can import
+  // shared deps (e.g. zod, googleapis) even when running from a
+  // different cwd that has no local node_modules.
+  const pkgNodeModules = findNodeModules();
+
   const esbuild = await import("esbuild");
   await esbuild.build({
     entryPoints: [tsEntryPath],
@@ -83,9 +107,11 @@ async function compilePlugin(tsEntryPath: string): Promise<string> {
     platform: "node",
     target: "node20",
     outfile,
-    // Externalize all bare-specifier packages (node_modules) but bundle
-    // local relative imports (./auth.js → ./auth.ts, ./tools.js, etc.)
-    packages: "external",
+    // Bundle EVERYTHING — including node_modules packages — so the
+    // compiled plugin is fully self-contained and works regardless of
+    // which directory the user runs co-assistant from.
+    // esbuild's nodePaths lets us find the package's own deps.
+    nodePaths: pkgNodeModules ? [pkgNodeModules] : [],
     logLevel: "warning",
   });
 

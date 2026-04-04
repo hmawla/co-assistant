@@ -445,8 +445,12 @@ async function handleInstall(
       continue;
     }
 
-    // Copy the entire plugin directory recursively
-    cpSync(plugin.sourcePath, destDir, { recursive: true });
+    // Copy the entire plugin directory recursively, excluding any
+    // stale compiled bundles from a previous install.
+    cpSync(plugin.sourcePath, destDir, {
+      recursive: true,
+      filter: (src) => !src.endsWith(".compiled.mjs"),
+    });
     console.log(`  ✅ ${plugin.id} — installed to plugins/${plugin.id}/`);
     installed++;
   }
