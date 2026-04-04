@@ -1,0 +1,13 @@
+{
+  "id": "google-calendar",
+  "name": "Google Calendar Plugin",
+  "version": "1.0.0",
+  "description": "View, create, and manage Google Calendar events",
+  "author": "co-assistant",
+  "requiredCredentials": [
+    { "key": "GCAL_CLIENT_ID", "description": "Google OAuth2 Client ID", "type": "oauth" },
+    { "key": "GCAL_CLIENT_SECRET", "description": "Google OAuth2 Client Secret", "type": "oauth" },
+    { "key": "GCAL_REFRESH_TOKEN", "description": "Google OAuth2 Refresh Token", "type": "oauth" }
+  ],
+  "dependencies": []
+}

@@ -1,0 +1,31 @@
+# Auto-detect text files and normalise line endings
+* text=auto
+
+# Source code
+*.ts text eol=lf
+*.js text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# Config / dotfiles
+.env.example text eol=lf
+.gitignore text eol=lf
+.gitattributes text eol=lf
+
+# Shell scripts
+*.sh text eol=lf
+
+# Lock files — treat as generated (hidden in diffs by default)
+package-lock.json linguist-generated=true -diff
+
+# Build output — treat as generated
+dist/** linguist-generated=true
+
+# Binary files
+*.db binary
+*.sqlite binary
+*.png binary
+*.jpg binary
+*.ico binary

@@ -1,0 +1,38 @@
+# User Profile
+
+> **Copy this file to `user.md` and fill in your details.**
+> The AI assistant uses this context to personalise responses, address you
+> correctly, and understand your professional background.
+> Changes take effect on the next message — no restart required.
+
+---
+
+## Basic Info
+
+- **Name:** Jane Doe
+- **Title:** Ms.
+- **Preferred name:** Jane
+- **Timezone:** America/New_York
+- **Language:** English
+
+## Professional
+
+- **Role:** Software Engineer
+- **Company / Organisation:** Acme Corp
+- **Industry:** Technology
+
+## Contact
+
+- **Primary email:** jane@example.com
+- **Calendar:** jane@example.com
+
+## Preferences
+
+- **Communication style:** Brief and to the point
+- **Working hours:** 9 AM – 6 PM
+- **Days off:** Saturday, Sunday
+
+## Notes
+
+<!-- Add anything else the assistant should know about you:
+     recurring meetings, VIP contacts, projects you're working on, etc. -->

@@ -1,0 +1,50 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment & secrets
+.env
+.env.local
+.env.*.local
+
+# User config (contains credentials — template committed as config.json.example)
+config.json
+
+# User profile (contains personal info — template committed as user.md.example)
+user.md
+
+# Runtime data (SQLite database, WAL, shared-memory)
+data/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+
+# Heartbeat state (runtime — prompts are tracked, state files are not)
+heartbeats/*.state.json
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor / IDE
+.vscode/
+!.vscode/settings.json
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
+
+# TypeScript incremental cache
+*.tsbuildinfo
+
+# Logs
+*.log
+logs/
+
+# Coverage & test output
+coverage/
+.nyc_output/

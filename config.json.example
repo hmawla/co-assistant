@@ -1,0 +1,32 @@
+{
+  "plugins": {
+    "gmail": {
+      "enabled": false,
+      "credentials": {
+        "GMAIL_CLIENT_ID": "",
+        "GMAIL_CLIENT_SECRET": "",
+        "GMAIL_REFRESH_TOKEN": ""
+      }
+    },
+    "google-calendar": {
+      "enabled": false,
+      "credentials": {
+        "GCAL_CLIENT_ID": "",
+        "GCAL_CLIENT_SECRET": "",
+        "GCAL_REFRESH_TOKEN": ""
+      }
+    }
+  },
+  "bot": {
+    "maxMessageLength": 4096,
+    "typingIndicator": true
+  },
+  "ai": {
+    "maxRetries": 3,
+    "sessionTimeout": 3600000
+  },
+  "pluginHealth": {
+    "maxFailures": 5,
+    "checkInterval": 60000
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "id": "gmail",
+  "name": "Gmail Plugin",
+  "version": "1.0.0",
+  "description": "Send, read, and search Gmail messages via the Gmail API",
+  "author": "co-assistant",
+  "requiredCredentials": [
+    { "key": "GMAIL_CLIENT_ID", "description": "Google OAuth2 Client ID", "type": "oauth" },
+    { "key": "GMAIL_CLIENT_SECRET", "description": "Google OAuth2 Client Secret", "type": "oauth" },
+    { "key": "GMAIL_REFRESH_TOKEN", "description": "Google OAuth2 Refresh Token", "type": "oauth" }
+  ],
+  "dependencies": []
+}
