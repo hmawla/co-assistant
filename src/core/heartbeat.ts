@@ -381,8 +381,10 @@ export class HeartbeatManager {
 
               if (cleanResponse) {
                 await notifyFn(event.name, cleanResponse);
+                this.logger.info({ event: event.name }, `Heartbeat "${event.name}" completed — notified user`);
+              } else {
+                this.logger.info({ event: event.name }, `Heartbeat "${event.name}" completed — nothing actionable, suppressed`);
               }
-              this.logger.info({ event: event.name }, `Heartbeat "${event.name}" completed`);
             } else {
               this.logger.warn({ event: event.name }, `Heartbeat "${event.name}" returned no response`);
             }
