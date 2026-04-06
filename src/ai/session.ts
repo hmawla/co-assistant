@@ -219,6 +219,44 @@ export class SessionManager {
     }
   }
 
+  /**
+   * Replace a broken/stuck session with a fresh one.
+   *
+   * Called when `sendAndWait` times out, which leaves the SDK session in
+   * an unrecoverable state. We disconnect the old session (best-effort)
+   * and create a replacement in-place so the pool stays at full capacity.
+   */
+  private async recreatePoolSession(ps: PooledSession): Promise<void> {
+    const idx = ps.index;
+    this.logger.warn({ session: idx }, "Recreating stuck session");
+
+    // Best-effort disconnect of the broken session
+    try { await ps.session.disconnect(); } catch { /* ignore */ }
+
+    try {
+      const client = this.clientWrapper.getClient();
+      const sdkTools = convertTools(this.tools);
+
+      const newSession = await (client as unknown as {
+        createSession(opts: Record<string, unknown>): Promise<CopilotSession>;
+      }).createSession({
+        model: this.currentModel,
+        tools: sdkTools.length > 0 ? sdkTools : undefined,
+        onPermissionRequest: approveAll,
+      });
+
+      // Replace in-place
+      ps.session = newSession;
+      ps.busy = false;
+      this.logger.info({ session: idx }, "Session recreated successfully");
+    } catch (err) {
+      // If recreation fails, remove from pool entirely
+      this.logger.error({ err, session: idx }, "Failed to recreate session — removing from pool");
+      const poolIdx = this.pool.indexOf(ps);
+      if (poolIdx >= 0) this.pool.splice(poolIdx, 1);
+    }
+  }
+
   // -----------------------------------------------------------------------
   // Session creation
   // -----------------------------------------------------------------------
@@ -326,6 +364,7 @@ export class SessionManager {
     const fullPrompt = this.applySystemContext(prompt);
 
     const ps = await this.acquire();
+    let sessionRecreating = false;
     try {
       this.logger.debug(
         { promptLength: fullPrompt.length, timeout, session: ps.index },
@@ -343,9 +382,23 @@ export class SessionManager {
     } catch (error: unknown) {
       const reason = error instanceof Error ? error.message : String(error);
       this.logger.error({ err: error, session: ps.index }, "sendMessage failed");
+
+      // If the SDK timed out waiting for session.idle, the session is stuck.
+      // Recreate it in the background so the pool stays healthy.
+      if (reason.includes("Timeout") && reason.includes("session.idle")) {
+        sessionRecreating = true;
+        this.recreatePoolSession(ps).catch((err) => {
+          this.logger.error({ err, session: ps.index }, "Background session recreation failed");
+        });
+      }
+
       throw AIError.sendFailed(reason);
     } finally {
-      this.release(ps);
+      // Skip release when the session is being recreated — recreatePoolSession
+      // handles the slot lifecycle (disconnect → create → mark idle).
+      if (!sessionRecreating) {
+        this.release(ps);
+      }
     }
   }
 
@@ -370,6 +423,7 @@ export class SessionManager {
     const fullPrompt = this.applySystemContext(prompt);
 
     const ps = await this.acquire();
+    let sessionRecreating = false;
     try {
       this.logger.debug(
         { promptLength: fullPrompt.length, session: ps.index },
@@ -414,9 +468,19 @@ export class SessionManager {
     } catch (error: unknown) {
       const reason = error instanceof Error ? error.message : String(error);
       this.logger.error({ err: error, session: ps.index }, "sendMessageStreaming failed");
+
+      if (reason.includes("Timeout") && reason.includes("session.idle")) {
+        sessionRecreating = true;
+        this.recreatePoolSession(ps).catch((err) => {
+          this.logger.error({ err, session: ps.index }, "Background session recreation failed");
+        });
+      }
+
       throw AIError.sendFailed(reason);
     } finally {
-      this.release(ps);
+      if (!sessionRecreating) {
+        this.release(ps);
+      }
     }
   }
 
