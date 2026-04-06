@@ -1,15 +1,17 @@
 # Gmail Plugin
 
-Send, read, and search Gmail messages via the Gmail REST API. This plugin is a
+Send, read, and search Gmail messages and threads via the Gmail REST API. This plugin is a
 **reference implementation** showing how to build Co-Assistant plugins end-to-end.
 
 ## Features
 
-| Tool             | Description                                              |
-| ---------------- | -------------------------------------------------------- |
-| `search_emails`  | Search Gmail using the same query syntax as the Gmail UI |
-| `read_email`     | Read the full content of an email by message ID          |
-| `send_email`     | Compose and send a plain-text email                      |
+| Tool              | Description                                                          |
+| ----------------- | -------------------------------------------------------------------- |
+| `search_threads`  | Search Gmail threads with full message history in a single API call  |
+| `get_thread`      | Get a full thread by ID with all messages and sent/received flags    |
+| `search_emails`   | Search Gmail using the same query syntax as the Gmail UI             |
+| `read_email`      | Read the full content of an email by message ID                      |
+| `send_email`      | Compose and send a plain-text email                                  |
 
 ## Getting Google OAuth2 Credentials
 

@@ -981,11 +981,13 @@ This pattern — a dedicated auth class that caches tokens and refreshes transpa
 
 ### `plugins/gmail/tools.ts`
 
-The Gmail plugin defines three tools:
+The Gmail plugin defines five tools:
 
 | Tool | Description | Parameters |
 |------|-------------|------------|
-| `search_emails` | Search Gmail with a query string | `query` (string), `maxResults` (number, optional) |
+| `search_threads` | Search Gmail threads with full message history | `query` (string), `maxThreads` (number, optional), `includeLatestBody` (boolean, optional) |
+| `get_thread` | Get a full thread by ID with all messages | `threadId` (string) |
+| `search_emails` | Search Gmail with a query string | `query` (string), `maxResults` (number, optional), `includeBody` (boolean, optional) |
 | `read_email` | Read the full content of an email | `messageId` (string) |
 | `send_email` | Send an email | `to` (string), `subject` (string), `body` (string) |
 

@@ -345,7 +345,14 @@ All configured via `.env` (the setup wizard handles this):
 
 | Command | Description |
 |---------|-------------|
+| `/start` | Welcome message |
 | `/help` | List available commands |
+| `/model [name]` | View or change the AI model |
+| `/plugins` | List plugins and their status |
+| `/enable <plugin>` | Enable a plugin |
+| `/disable <plugin>` | Disable a plugin |
+| `/clear` | Clear conversation and reset AI context |
+| `/status` | Show bot status |
 | `/heartbeat [name]` | Run heartbeat event(s) on demand |
 | `/hb [name]` | Shorthand for `/heartbeat` |
 
@@ -391,7 +398,7 @@ Both files are injected as system-level context on every message:
 
 | Plugin | Tools provided |
 |--------|---------------|
-| **Gmail** | Search threads, search emails, read email, send email, get thread |
+| **Gmail** | Search threads, get thread, search emails, read email, send email |
 | **Google Calendar** | List events, create event, update event, delete event |
 
 ### Install Plugins
