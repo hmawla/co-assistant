@@ -434,18 +434,23 @@ export class HeartbeatManager {
     // Step 3: Send prompt to AI
     const response = await sendFn(finalPrompt);
 
-    if (!response) {
-      this.logger.warn({ event: event.name }, `Heartbeat "${event.name}" returned no response`);
-      return null;
-    }
-
-    // Step 4: Post-process response
+    // Step 4: Post-process response.
+    // IMPORTANT: call postAgentCall even when response is empty so the hook can
+    // still save state (e.g. mark threads as processed for deduplication).
     if (event.hooks?.postAgentCall) {
-      const { newState, response: hookResponse } = await event.hooks.postAgentCall(preData, response);
+      const { newState, response: hookResponse } = await event.hooks.postAgentCall(preData, response ?? "");
       if (newState !== null) {
         this.saveState(event.name, newState);
       }
+      if (!hookResponse) {
+        this.logger.warn({ event: event.name }, `Heartbeat "${event.name}" returned no response`);
+      }
       return hookResponse;
+    }
+
+    if (!response) {
+      this.logger.warn({ event: event.name }, `Heartbeat "${event.name}" returned no response`);
+      return null;
     }
 
     // Backward compat: extract/save processed IDs and strip PROCESSED marker
