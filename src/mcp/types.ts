@@ -225,13 +225,20 @@ export function toSdkMcpServers(config: McpConfig | undefined): SdkMcpServers | 
   for (const [id, server] of Object.entries(config.servers)) {
     if (!server.enabled) continue;
 
+    // Omit `tools` only when it's the wildcard sentinel ["*"] — let the SDK expose all tools.
+    // An explicit empty array [] is passed through as-is (caller's intent).
+    const toolFilter =
+      server.tools.length === 1 && server.tools[0] === "*"
+        ? undefined
+        : server.tools;
+
     if (server.type === "local" || server.type === "stdio") {
       const entry: SdkMcpLocalEntry = {
         type: server.type,
         command: server.command,
         args: server.args,
-        tools: server.tools,
       };
+      if (toolFilter) entry.tools = toolFilter;
       if (server.env) entry.env = resolveRecord(server.env);
       if (server.cwd) entry.cwd = server.cwd;
       if (server.timeout !== undefined) entry.timeout = server.timeout;
@@ -240,8 +247,8 @@ export function toSdkMcpServers(config: McpConfig | undefined): SdkMcpServers | 
       const entry: SdkMcpHttpEntry = {
         type: server.type,
         url: server.url,
-        tools: server.tools,
       };
+      if (toolFilter) entry.tools = toolFilter;
       if (server.headers) entry.headers = resolveRecord(server.headers);
       if (server.timeout !== undefined) entry.timeout = server.timeout;
       result[id] = entry;

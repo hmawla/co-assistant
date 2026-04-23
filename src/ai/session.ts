@@ -162,6 +162,16 @@ export class SessionManager {
     if (personality) parts.push(personality);
     if (userProfile) parts.push(userProfile);
 
+    // Tell the model what MCP integrations are active so it doesn't ask.
+    if (this.mcpServers && Object.keys(this.mcpServers).length > 0) {
+      const ids = Object.keys(this.mcpServers).join(", ");
+      parts.push(
+        `## Active MCP Integrations\n` +
+        `The following MCP server integrations are connected and available as tools: **${ids}**.\n` +
+        `You can invoke these integrations directly — no configuration or setup is needed.`,
+      );
+    }
+
     if (parts.length === 0) return prompt;
     return `<system>\n${parts.join("\n\n---\n\n")}\n</system>\n\n${prompt}`;
   }
