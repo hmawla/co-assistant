@@ -151,8 +151,8 @@ export function createMessageHandler(deps: MessageHandlerDeps) {
     conversationRepo.addMessage("user", text);
     logger.debug({ textLength: text.length }, "User message stored");
 
-    // 4. Ensure the AI session pool is active
-    if (!sessionManager.isActive()) {
+    // 4. Ensure the AI session pool is active (or rebuilding — messages will queue)
+    if (!sessionManager.isActive() && !sessionManager.isRebuilding()) {
       logger.error("No active AI session — cannot process message");
       await ctx.reply("⚠️ AI session is not active. Please restart the bot.", replyOpts);
       return;

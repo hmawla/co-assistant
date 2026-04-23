@@ -82,7 +82,11 @@ function buildLoggerOptions(): pino.LoggerOptions & { transport?: pino.Transport
   if (hasPretty) {
     targets.push({
       target: "pino-pretty",
-      level,
+      // "trace" so the worker thread accepts everything; the root logger's
+      // dynamically-changeable level (e.g. set to "debug" by --verbose) is the
+      // sole filter gate. Fixing this to `level` here would bake "info" into
+      // the worker and make runtime level changes silently ineffective.
+      level: "trace",
       options: {
         colorize: true,
         translateTime: "SYS:HH:MM:ss",
@@ -92,7 +96,7 @@ function buildLoggerOptions(): pino.LoggerOptions & { transport?: pino.Transport
   } else {
     targets.push({
       target: "pino/file",
-      level,
+      level: "trace", // same reasoning — let root logger level govern filtering
       options: { destination: 1 }, // fd 1 = stdout
     });
   }

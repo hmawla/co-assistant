@@ -274,22 +274,18 @@ export function registerBotCommands(
       const count = conversationRepo.count();
       conversationRepo.clear();
 
-      // 2. Rebuild the AI session pool so the model starts with a blank context
-      await ctx.reply("🔄 Clearing context and rebuilding sessions…");
-      try {
-        await sessionManager.resetSessions();
-        await ctx.reply(
-          `✅ Context cleared.\n` +
-            `• ${count} message${count !== 1 ? "s" : ""} deleted from history\n` +
-            `• AI sessions rebuilt — starting fresh`,
-        );
-      } catch (err: unknown) {
-        const reason = err instanceof Error ? err.message : String(err);
-        logger.error({ err }, "Failed to rebuild sessions during /clear");
-        await ctx.reply(
-          `🗑️ History cleared (${count} messages), but session rebuild failed: ${reason}`,
-        );
-      }
+      // 2. Kick off pool rebuild in the background — don't make the user wait.
+      //    Messages arriving during rebuild queue in acquire() and are served
+      //    once the new pool is ready (waiter drain in createSession).
+      sessionManager.resetSessions().catch((err: unknown) => {
+        logger.error({ err }, "Background session rebuild failed after /clear");
+      });
+
+      await ctx.reply(
+        `✅ Context cleared.\n` +
+          `• ${count} message${count !== 1 ? "s" : ""} deleted from history\n` +
+          `• AI sessions rebuilding in background`,
+      );
     }),
   );
 

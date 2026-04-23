@@ -42,6 +42,7 @@ interface CopilotSession {
   send(options: { prompt: string }): Promise<void>;
   sendAndWait(options: { prompt: string }, timeout?: number): Promise<{ data: { content: string } } | null>;
   on(event: string, handler: (...args: unknown[]) => void): void;
+  on(handler: (event: unknown) => void): void;
   disconnect(): Promise<void>;
 }
 
@@ -124,6 +125,12 @@ export class SessionManager {
 
   /** Maximum time (ms) a caller will wait in the queue before giving up. */
   private static readonly ACQUIRE_TIMEOUT_MS = 300_000; // 5 minutes
+
+  /** True while the pool is being closed and recreated. */
+  private rebuilding = false;
+
+  /** Prevents concurrent resets (e.g. double /clear). */
+  private resetInProgress = false;
 
   constructor(private clientWrapper: CopilotClientWrapper) {
     this.logger = logger;
@@ -260,6 +267,8 @@ export class SessionManager {
         onPermissionRequest: approveAll,
       });
 
+      this.attachMcpDebugListeners(newSession, idx);
+
       // Replace in-place
       ps.session = newSession;
       ps.busy = false;
@@ -270,6 +279,60 @@ export class SessionManager {
       const poolIdx = this.pool.indexOf(ps);
       if (poolIdx >= 0) this.pool.splice(poolIdx, 1);
     }
+  }
+
+  /**
+   * Attach debug-level listeners to a session that log whenever an MCP tool
+   * is invoked or completes. Listeners are no-ops when the log level is above
+   * "debug", so there is no overhead in normal (non-verbose) operation.
+   *
+   * Uses the wildcard `session.on(handler)` form so it catches all events
+   * regardless of whether the CLI populates optional fields like mcpServerName.
+   */
+  private attachMcpDebugListeners(session: CopilotSession, index: number): void {
+    const pendingMcpCalls = new Set<string>();
+
+    session.on((raw: unknown) => {
+      const event = raw as { type?: string; data?: Record<string, unknown> };
+      const type = event?.type;
+      const data = event?.data;
+
+      if (!type || (!type.startsWith("tool.") && !type.startsWith("mcp."))) return;
+
+      if (type === "tool.execution_start") {
+        const toolCallId = data?.toolCallId as string | undefined;
+        const isMcp = !!(data?.mcpServerName || data?.mcpToolName);
+
+        if (isMcp && toolCallId) pendingMcpCalls.add(toolCallId);
+
+        this.logger.debug(
+          {
+            session: index,
+            server: data?.mcpServerName,
+            tool: data?.mcpToolName ?? data?.toolName,
+            toolCallId,
+            args: data?.arguments,
+          },
+          isMcp ? "MCP tool invoked" : "tool invoked",
+        );
+        return;
+      }
+
+      if (type === "tool.execution_complete") {
+        const toolCallId = data?.toolCallId as string | undefined;
+        const isMcp = toolCallId ? pendingMcpCalls.has(toolCallId) : false;
+        if (isMcp && toolCallId) pendingMcpCalls.delete(toolCallId);
+
+        this.logger.debug(
+          { session: index, toolCallId, success: data?.success },
+          isMcp ? "MCP tool completed" : "tool completed",
+        );
+        return;
+      }
+
+      // Log any other tool.* or mcp.* event at debug level for visibility
+      this.logger.debug({ session: index, type, data }, "session event");
+    });
   }
 
   // -----------------------------------------------------------------------
@@ -324,6 +387,7 @@ export class SessionManager {
             mcpServers: this.mcpServers,
             onPermissionRequest: approveAll,
           });
+          this.attachMcpDebugListeners(session, i);
           this.logger.debug({ index: i }, "Pool session created");
           return { session, busy: false, index: i } as PooledSession;
         }),
@@ -352,10 +416,21 @@ export class SessionManager {
 
       this.pool = created;
       this.currentModel = model;
+      this.rebuilding = false;
+
+      // Drain any callers that queued while the pool was being rebuilt
+      while (this.waiters.length > 0) {
+        const ps = this.pool.find((s) => !s.busy);
+        if (!ps) break;
+        const waiter = this.waiters.shift()!;
+        ps.busy = true;
+        waiter.resolve(ps);
+      }
 
       this.logger.info({ model, poolSize: this.poolSize }, "Session pool ready");
     } catch (error: unknown) {
       const reason = error instanceof Error ? error.message : String(error);
+      this.rebuilding = false;
       this.logger.error({ err: error, model }, "Failed to create session pool");
       throw AIError.sessionCreateFailed(reason);
     }
@@ -646,9 +721,18 @@ export class SessionManager {
    * @throws {AIError} If pool recreation fails.
    */
   async resetSessions(): Promise<void> {
+    if (this.resetInProgress) {
+      this.logger.warn("Session reset already in progress — skipping duplicate request");
+      return;
+    }
+    this.resetInProgress = true;
     this.logger.info({ model: this.currentModel }, "Resetting sessions (fresh context)");
-    await this.closeSession();
-    await this.createSession(this.currentModel, this.tools);
+    try {
+      await this.closeSession();
+      await this.createSession(this.currentModel, this.tools);
+    } finally {
+      this.resetInProgress = false;
+    }
   }
 
   /**
@@ -679,6 +763,8 @@ export class SessionManager {
    * Safe to call even when the pool is empty (no-op).
    */
   async closeSession(): Promise<void> {
+    this.rebuilding = true;
+
     if (this.pool.length === 0) {
       this.logger.debug("No active sessions to close");
       return;
@@ -722,6 +808,14 @@ export class SessionManager {
   }
 
   /**
+   * True while the pool is being torn down and rebuilt.
+   * Callers may queue messages — they will be processed once the pool is ready.
+   */
+  isRebuilding(): boolean {
+    return this.rebuilding;
+  }
+
+  /**
    * Number of sessions not currently processing a message.
    * Useful for the Telegram handler to decide whether to show a "queued" notice.
    */
@@ -745,7 +839,7 @@ export class SessionManager {
    * @throws {AIError} When called without an active pool.
    */
   private ensureSession(): void {
-    if (this.pool.length === 0) {
+    if (this.pool.length === 0 && !this.rebuilding) {
       throw AIError.sessionCreateFailed("No active sessions — call createSession() first");
     }
   }
