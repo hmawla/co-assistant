@@ -195,6 +195,11 @@ export class App {
     const heartbeatManager = new HeartbeatManager();
     this.heartbeatManager = heartbeatManager;
 
+    // Provide heartbeat hooks with access to plugin tools (e.g. gmail__search_threads)
+    heartbeatManager.setContextProvider(async () => ({
+      callTool: pluginManager.callTool.bind(pluginManager),
+    }));
+
     /**
      * Runs one or all heartbeat events on demand and delivers results in-chat.
      * Replies are threaded to the user's original /heartbeat command message.
@@ -205,7 +210,7 @@ export class App {
         ? { reply_parameters: { message_id: replyToId } } as Record<string, unknown>
         : {};
 
-      const allEvents = heartbeatManager.listEvents();
+      const allEvents = await heartbeatManager.listEvents();
 
       if (allEvents.length === 0) {
         await ctx.reply("No heartbeat events configured.\nAdd one with: co-assistant heartbeat add", replyOpts);
@@ -233,57 +238,24 @@ export class App {
       try {
         for (const event of eventsToRun) {
           try {
-            // Inject dedup state
-            const useDedup = event.prompt.includes("{{DEDUP_STATE}}");
-            const state = useDedup ? heartbeatManager.loadState(event.name) : null;
-            let finalPrompt = event.prompt;
-            if (state) {
-              finalPrompt = event.prompt.replace(
-                "{{DEDUP_STATE}}",
-                state.processedIds.length > 0
-                  ? `Previously processed IDs (${state.processedIds.length} total) — SKIP these:\n${state.processedIds.map((id) => `- ${id}`).join("\n")}`
-                  : "No previously processed items — this is the first run.",
-              );
-            }
+            const notifyText = await heartbeatManager.runEvent(
+              event,
+              (prompt) => sessionManager.sendEphemeral(prompt),
+            );
 
-            const response = await sessionManager.sendEphemeral(finalPrompt);
-
-            if (!response) {
+            if (!notifyText) {
               await ctx.reply(`⚠️ Heartbeat "${event.name}" returned no response.`, replyOpts);
               continue;
             }
 
-            // Persist dedup IDs — use a Set to avoid duplicates
-            const processedRe = /<!--\s*PROCESSED:\s*(.*?)\s*-->/gi;
-            if (useDedup && state) {
-              const existing = new Set(state.processedIds);
-              let m: RegExpExecArray | null;
-              while ((m = processedRe.exec(response)) !== null) {
-                for (const id of (m[1] ?? "").split(",")) {
-                  const t = id.trim();
-                  if (t && !existing.has(t)) {
-                    state.processedIds.push(t);
-                    existing.add(t);
-                  }
-                }
-              }
-              processedRe.lastIndex = 0;
-              state.lastRun = new Date().toISOString();
-              heartbeatManager.saveState(event.name, state);
-            }
-
-            // Clean marker and deliver — threaded to original command
-            const clean = response.replace(/<!--\s*PROCESSED:\s*.*?\s*-->/gi, "").trim();
-            if (clean) {
-              const header = `💓 *Heartbeat: ${event.name}*\n\n`;
-              const chunks = splitMessage(header + clean);
-              for (const chunk of chunks) {
-                await safeSendMarkdown(
-                  (text, extra) => ctx.reply(text, extra as Parameters<typeof ctx.reply>[1]),
-                  chunk,
-                  replyOpts as Record<string, unknown>,
-                );
-              }
+            const header = `💓 *Heartbeat: ${event.name}*\n\n`;
+            const chunks = splitMessage(header + notifyText);
+            for (const chunk of chunks) {
+              await safeSendMarkdown(
+                (text, extra) => ctx.reply(text, extra as Parameters<typeof ctx.reply>[1]),
+                chunk,
+                replyOpts as Record<string, unknown>,
+              );
             }
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
@@ -350,7 +322,13 @@ export class App {
 
         case "help":
           await ctx.reply(
-            "🤖 *Co-Assistant Commands*\n\n" +
+            "🤖 *Co\\-Assistant Commands*\n\n" +
+            "/start — Welcome message\n" +
+            "/model \\[name\\] — View or change AI model\n" +
+            "/plugins — List plugins and their status\n" +
+            "/enable \\<plugin\\> — Enable a plugin\n" +
+            "/disable \\<plugin\\> — Disable a plugin\n" +
+            "/clear — Clear conversation and reset AI context\n" +
             "/heartbeat \\[name\\] — Run heartbeat event\\(s\\)\n" +
             "/hb \\[name\\] — Shorthand for /heartbeat\n" +
             "/mcp — List configured MCP servers\n" +
@@ -389,9 +367,107 @@ export class App {
           break;
         }
 
+        case "clear": {
+          const count = conversationRepo.count();
+          conversationRepo.clear();
+          sessionManager.resetSessions().catch((err: unknown) => {
+            this.logger.error({ err }, "Background session rebuild failed after /clear");
+          });
+          await ctx.reply(
+            `✅ Context cleared.\n` +
+              `• ${count} message${count !== 1 ? "s" : ""} deleted from history\n` +
+              `• AI sessions rebuilding in background`,
+            replyOpts,
+          );
+          break;
+        }
+
+        case "start": {
+          const currentModel = modelRegistry.getCurrentModelId();
+          const pluginList = pluginManager.getPluginInfoList();
+          const activePluginIds = pluginList
+            .filter((p) => p.enabled && p.status === "active")
+            .map((p) => p.id);
+          const activeList = activePluginIds.length > 0 ? activePluginIds.join(", ") : "none";
+          await ctx.reply(
+            `👋 Welcome to Co-Assistant!\n\n` +
+              `I'm your AI-powered personal assistant. Send me any message and I'll help you out.\n\n` +
+              `Use /help to see available commands.\n` +
+              `Current model: ${currentModel}\n` +
+              `Active plugins: ${activeList}`,
+            replyOpts,
+          );
+          break;
+        }
+
+        case "model": {
+          const modelArg = args.trim();
+          if (!modelArg) {
+            const currentId = modelRegistry.getCurrentModelId();
+            const models = modelRegistry.getAvailableModels();
+            const list = models
+              .map((m) => `${m.id === currentId ? "▸ " : "  "}${m.id} — ${m.description}`)
+              .join("\n");
+            await ctx.reply(`🤖 Current model: ${currentId}\n\nAvailable models:\n${list}`, replyOpts);
+          } else {
+            modelRegistry.setCurrentModel(modelArg);
+            try {
+              await sessionManager.switchModel(modelArg);
+              await ctx.reply(`✅ Model switched to ${modelArg}`, replyOpts);
+            } catch (switchErr: unknown) {
+              const reason = switchErr instanceof Error ? switchErr.message : String(switchErr);
+              this.logger.error({ err: switchErr, modelId: modelArg }, "Failed to switch model session");
+              await ctx.reply(
+                `⚠️ Model preference updated to ${modelArg}, but session rebuild failed: ${reason}`,
+                replyOpts,
+              );
+            }
+          }
+          break;
+        }
+
+        case "plugins": {
+          const pluginInfoList = pluginManager.getPluginInfoList();
+          if (pluginInfoList.length === 0) {
+            await ctx.reply("🔌 No plugins discovered.", replyOpts);
+          } else {
+            const lines = pluginInfoList.map((p) => {
+              const icon = p.enabled && p.status === "active" ? "✅" : "❌";
+              const toolInfo =
+                p.enabled && p.status === "active"
+                  ? `[${p.tools.length} tool${p.tools.length !== 1 ? "s" : ""}]`
+                  : "[disabled]";
+              return `${icon} ${p.id} (v${p.version}) - ${p.name} ${toolInfo}`;
+            });
+            await ctx.reply(`🔌 Plugins:\n${lines.join("\n")}`, replyOpts);
+          }
+          break;
+        }
+
+        case "enable": {
+          const enableTarget = args.trim();
+          if (!enableTarget) {
+            await ctx.reply("Usage: /enable <plugin>", replyOpts);
+          } else {
+            await pluginManager.enablePlugin(enableTarget);
+            await ctx.reply(`✅ Plugin "${enableTarget}" has been enabled.`, replyOpts);
+          }
+          break;
+        }
+
+        case "disable": {
+          const disableTarget = args.trim();
+          if (!disableTarget) {
+            await ctx.reply("Usage: /disable <plugin>", replyOpts);
+          } else {
+            await pluginManager.disablePlugin(disableTarget);
+            await ctx.reply(`✅ Plugin "${disableTarget}" has been disabled.`, replyOpts);
+          }
+          break;
+        }
+
         default:
-          // Unknown command — fall through to message handler
-          await messageHandler(ctx, `/${command} ${args}`.trim());
+          await ctx.reply("❓ Unknown command. Use /help to see available commands.", replyOpts);
       }
 
       if (this.verbose) {
@@ -502,10 +578,10 @@ export class App {
 
     // 12. Start heartbeat scheduler
     const heartbeatInterval = parseInt(config.env.HEARTBEAT_INTERVAL_MINUTES || "0", 10);
-    const heartbeatEvents = heartbeatManager.listEvents();
+    const heartbeatEvents = await heartbeatManager.listEvents();
 
     if (heartbeatInterval > 0 && heartbeatEvents.length > 0) {
-      heartbeatManager.start(
+      await heartbeatManager.start(
         heartbeatInterval,
         // Use an ephemeral (disposable) session per heartbeat run — zero
         // conversation history prevents the AI from hallucinating stale data.

@@ -473,6 +473,38 @@ export class PluginManager {
     return this.getPluginInfoList().find((info) => info.id === pluginId);
   }
 
+  /**
+   * Call a tool on an active plugin by its unprefixed tool name.
+   *
+   * Heartbeat hooks (and other callers) can use this to invoke plugin
+   * capabilities without going through the AI session. The call is routed
+   * through the sandbox so errors are isolated and failure counts are tracked.
+   *
+   * @param pluginId - Plugin identifier (e.g. `"gmail"`).
+   * @param toolName - Unprefixed tool name (e.g. `"search_threads"`).
+   * @param args     - Arguments forwarded to the tool handler.
+   * @returns The tool handler's return value.
+   * @throws If the plugin is not active or the named tool does not exist.
+   */
+  async callTool(
+    pluginId: string,
+    toolName: string,
+    args: Record<string, unknown>,
+  ): Promise<string | Record<string, unknown>> {
+    const plugin = this.plugins.get(pluginId);
+    if (!plugin) {
+      throw new Error(`Plugin "${pluginId}" is not active`);
+    }
+
+    const tools = plugin.getTools();
+    const tool = tools.find((t) => t.name === toolName);
+    if (!tool) {
+      throw new Error(`Tool "${toolName}" not found in plugin "${pluginId}"`);
+    }
+
+    return this.sandbox.wrapToolHandler(pluginId, toolName, tool.handler)(args);
+  }
+
   // -----------------------------------------------------------------------
   // Shutdown
   // -----------------------------------------------------------------------

@@ -29,9 +29,9 @@ export function registerHeartbeatCommand(program: Command): void {
   heartbeat
     .command("list")
     .description("List all heartbeat events")
-    .action(() => {
+    .action(async () => {
       const manager = new HeartbeatManager();
-      const events = manager.listEvents();
+      const events = await manager.listEvents();
 
       if (events.length === 0) {
         console.log("\n  No heartbeat events found.");
@@ -107,9 +107,9 @@ export function registerHeartbeatCommand(program: Command): void {
   heartbeat
     .command("show <name>")
     .description("Show a heartbeat event's prompt")
-    .action((name: string) => {
+    .action(async (name: string) => {
       const manager = new HeartbeatManager();
-      const events = manager.listEvents();
+      const events = await manager.listEvents();
       const event = events.find((e) => e.name === name);
 
       if (!event) {
@@ -140,7 +140,7 @@ export function registerHeartbeatCommand(program: Command): void {
     .option("--no-telegram", "Print results to console only, don't send to Telegram")
     .action(async (name: string | undefined, opts: { telegram: boolean }) => {
       const manager = new HeartbeatManager();
-      const allEvents = manager.listEvents();
+      const allEvents = await manager.listEvents();
 
       if (allEvents.length === 0) {
         console.log("\n  No heartbeat events found.");

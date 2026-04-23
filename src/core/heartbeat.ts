@@ -12,6 +12,17 @@
  * in its response; those IDs are persisted in a companion `.state.json` file and
  * injected on subsequent runs.
  *
+ * **Hooks**: Each heartbeat can optionally supply a `.heartbeat.hooks.mjs` module.
+ * The engine always loads deduplication state before calling hooks:
+ * - `preAgentCall(state)` — receives the engine-loaded {@link HeartbeatState}; returns
+ *   data passed to later steps, or `null` to abort the pipeline.
+ * - `postAgentCall(preData, agentResponse)` — returns `{ newState, response }`.
+ *   The engine persists `newState` (when non-null) and sends `response` to the user
+ *   (when non-null). Hook modules do not need to call `saveState` themselves.
+ *
+ * **Null-abort**: If a `preAgentCall` hook returns `null`, the pipeline is aborted
+ * immediately — the AI agent is not called and no notification is sent.
+ *
  * **Update checker**: A built-in check runs alongside heartbeat events. It queries
  * the npm registry for the latest published version and notifies the user once
  * when a newer version is available (no AI tokens consumed).
@@ -23,8 +34,9 @@
  */
 
 import { readdirSync, readFileSync, writeFileSync, unlinkSync, existsSync, mkdirSync } from "node:fs";
-import { join, basename } from "node:path";
+import { join, basename, resolve } from "node:path";
 import { createRequire } from "node:module";
+import { pathToFileURL } from "node:url";
 import type { Logger } from "pino";
 import { createChildLogger } from "./logger.js";
 
@@ -44,6 +56,12 @@ const STATE_EXT = ".state.json";
 /** Placeholder token in prompts that gets replaced with dedup context. */
 const DEDUP_PLACEHOLDER = "{{DEDUP_STATE}}";
 
+/** File extension for per-event hook modules. */
+const HOOKS_EXT = ".heartbeat.hooks.mjs";
+
+/** Placeholder token in prompts that gets replaced with pre-agent data JSON. */
+const PRE_AGENT_DATA_PLACEHOLDER = "{{PRE_AGENT_DATA}}";
+
 /** Maximum number of processed IDs to retain per event (prevents unbounded growth). */
 const MAX_STATE_IDS = 200;
 
@@ -60,6 +78,31 @@ const UPDATE_CHECK_STATE = join(HEARTBEATS_DIR, "update-check.state.json");
 // Types
 // ---------------------------------------------------------------------------
 
+/**
+ * Optional hook functions that customise heartbeat execution.
+ * Loaded from a sibling `.heartbeat.hooks.mjs` file when present.
+ */
+export interface HeartbeatHooks {
+  /**
+   * Run before the AI call. Receives the loaded dedup state and an optional
+   * context object provided by the engine (e.g. `{ callTool, logger }` for invoking
+   * plugin tools directly or emitting structured log entries).
+   * Return data passed to later steps, or null to abort.
+   * Returning `null` aborts the pipeline — the AI agent is not called and no notification is sent.
+   */
+  preAgentCall?: (state: HeartbeatState, context: Record<string, unknown>) => Promise<Record<string, unknown> | null>;
+  /** Build the final prompt from pre-call data and the base prompt. */
+  buildPrompt?: (preData: Record<string, unknown>, basePrompt: string) => Promise<string>;
+  /**
+   * Post-process the AI response. Return `newState` (saved by the engine) and
+   * `response` (sent to user). Return null for either to skip that action.
+   */
+  postAgentCall?: (
+    preData: Record<string, unknown>,
+    agentResponse: string,
+  ) => Promise<{ newState: HeartbeatState | null; response: string | null }>;
+}
+
 /** A single heartbeat event loaded from disk. */
 export interface HeartbeatEvent {
   /** Event name derived from the filename (e.g. "morning-briefing"). */
@@ -68,6 +111,8 @@ export interface HeartbeatEvent {
   prompt: string;
   /** Absolute path to the source file. */
   filePath: string;
+  /** Optional hooks loaded from a sibling `.heartbeat.hooks.mjs` file. */
+  hooks?: HeartbeatHooks;
 }
 
 /**
@@ -119,10 +164,24 @@ export class HeartbeatManager {
   private isRunning = false;
   /** Prevents overlapping cycles when a run takes longer than the interval. */
   private cycleInProgress = false;
+  /** Optional provider that supplies extra context (e.g. `callTool`) to hook functions. */
+  private contextProvider: (() => Promise<Record<string, unknown>>) | undefined = undefined;
 
   constructor() {
     this.logger = createChildLogger("heartbeat");
     ensureHeartbeatsDir();
+  }
+
+  /**
+   * Register a provider that returns extra context passed to `preAgentCall` hooks.
+   *
+   * Typically set at application startup so hooks can call plugin tools
+   * (e.g. `context.callTool('gmail', 'search_threads', args)`).
+   *
+   * @param fn - Async factory that returns the context object for each run.
+   */
+  setContextProvider(fn: () => Promise<Record<string, unknown>>): void {
+    this.contextProvider = fn;
   }
 
   // -----------------------------------------------------------------------
@@ -131,20 +190,37 @@ export class HeartbeatManager {
 
   /**
    * Discover all heartbeat event files in the heartbeats directory.
+   * If a sibling `.heartbeat.hooks.mjs` file exists, it is dynamically
+   * imported and its exports attached as hooks on the event.
    *
    * @returns Array of {@link HeartbeatEvent} objects, one per file.
    */
-  listEvents(): HeartbeatEvent[] {
+  async listEvents(): Promise<HeartbeatEvent[]> {
     ensureHeartbeatsDir();
 
     const files = readdirSync(HEARTBEATS_DIR).filter((f) => f.endsWith(HEARTBEAT_EXT));
 
-    return files.map((file) => {
+    const events: HeartbeatEvent[] = [];
+    for (const file of files) {
       const filePath = join(HEARTBEATS_DIR, file);
       const name = basename(file, HEARTBEAT_EXT);
       const prompt = readFileSync(filePath, "utf-8").trim();
-      return { name, prompt, filePath };
-    });
+      const event: HeartbeatEvent = { name, prompt, filePath };
+
+      const hooksPath = filePath.replace(HEARTBEAT_EXT, HOOKS_EXT);
+      if (existsSync(hooksPath)) {
+        try {
+          const hooksModule = await import(pathToFileURL(resolve(hooksPath)).href) as HeartbeatHooks;
+          event.hooks = hooksModule;
+        } catch (err) {
+          this.logger.warn({ err, hooksPath }, "Failed to load hooks module — skipping hooks");
+        }
+      }
+
+      events.push(event);
+    }
+
+    return events;
   }
 
   /**
@@ -301,6 +377,101 @@ export class HeartbeatManager {
   // -----------------------------------------------------------------------
 
   /**
+   * Execute a single heartbeat event through the full pipeline (pre → agent → post).
+   *
+   * Extracts the per-event pipeline logic shared between the scheduled cycle and
+   * on-demand invocations so there is no duplicated pre/post/dedup logic.
+   *
+   * @param event  - The heartbeat event to run.
+   * @param sendFn - Function that sends a prompt to the AI and returns the response.
+   * @returns The notify text to deliver to the user, or null if suppressed.
+   */
+  async runEvent(event: HeartbeatEvent, sendFn: HeartbeatSendFn): Promise<string | null> {
+    return this.runEventPipeline(event, sendFn);
+  }
+
+  /**
+   * Internal pipeline for a single heartbeat event.
+   * Called by both {@link runEvent} (on-demand) and the scheduled {@link start} cycle.
+   */
+  private async runEventPipeline(event: HeartbeatEvent, sendFn: HeartbeatSendFn): Promise<string | null> {
+    this.logger.debug({ event: event.name }, `Executing heartbeat: ${event.name}`);
+
+    // Load state for the event (always — needed to pass to preAgentCall)
+    const state = this.loadState(event.name);
+
+    // Build hook context once (shared across all hook steps in this run)
+    const hookContext = this.contextProvider ? await this.contextProvider() : {};
+    hookContext["logger"] = createChildLogger(this.logger, { component: `heartbeat:${event.name}` });
+
+    // Step 1: Pre-agent call
+    let preData: Record<string, unknown>;
+    if (event.hooks?.preAgentCall) {
+      const result = await event.hooks.preAgentCall(state, hookContext);
+      if (result === null) {
+        this.logger.debug({ event: event.name }, `Heartbeat "${event.name}" aborted by preAgentCall`);
+        return null;
+      }
+      preData = result;
+    } else {
+      preData = {};
+    }
+
+    // Step 2: Build final prompt
+    let finalPrompt: string;
+    const useDedup = !event.hooks?.buildPrompt && event.prompt.includes(DEDUP_PLACEHOLDER);
+
+    if (event.hooks?.buildPrompt) {
+      finalPrompt = await event.hooks.buildPrompt(preData, event.prompt);
+    } else if (event.prompt.includes(PRE_AGENT_DATA_PLACEHOLDER)) {
+      finalPrompt = event.prompt.replace(PRE_AGENT_DATA_PLACEHOLDER, JSON.stringify(preData));
+    } else {
+      finalPrompt = useDedup
+        ? this.injectDedupContext(event.prompt, state)
+        : event.prompt;
+    }
+
+    // Step 3: Send prompt to AI
+    const response = await sendFn(finalPrompt);
+
+    if (!response) {
+      this.logger.warn({ event: event.name }, `Heartbeat "${event.name}" returned no response`);
+      return null;
+    }
+
+    // Step 4: Post-process response
+    if (event.hooks?.postAgentCall) {
+      const { newState, response: hookResponse } = await event.hooks.postAgentCall(preData, response);
+      if (newState !== null) {
+        this.saveState(event.name, newState);
+      }
+      return hookResponse;
+    }
+
+    // Backward compat: extract/save processed IDs and strip PROCESSED marker
+    if (useDedup) {
+      const newIds = this.extractProcessedIds(response);
+      if (newIds.length > 0) {
+        const existing = new Set(state.processedIds);
+        const uniqueNew = newIds.filter((id) => !existing.has(id));
+        if (uniqueNew.length > 0) {
+          state.processedIds.push(...uniqueNew);
+          state.lastRun = new Date().toISOString();
+          this.saveState(event.name, state);
+          this.logger.info(
+            { event: event.name, newIds: uniqueNew.length, totalIds: state.processedIds.length },
+            `Dedup: recorded ${uniqueNew.length} new IDs for "${event.name}"`,
+          );
+        }
+      }
+    }
+
+    const cleanResponse = response.replace(PROCESSED_MARKER_RE, "").trim();
+    PROCESSED_MARKER_RE.lastIndex = 0;
+    return cleanResponse || null;
+  }
+
+  /**
    * Start the heartbeat scheduler.
    *
    * Runs all heartbeat events immediately on first tick, then repeats at the
@@ -310,11 +481,11 @@ export class HeartbeatManager {
    * @param sendFn          - Function that sends a prompt to the AI and returns the response.
    * @param notifyFn        - Function that delivers the AI response to the user.
    */
-  start(
+  async start(
     intervalMinutes: number,
     sendFn: HeartbeatSendFn,
     notifyFn: HeartbeatNotifyFn,
-  ): void {
+  ): Promise<void> {
     if (this.isRunning) {
       this.logger.warn("Heartbeat scheduler already running");
       return;
@@ -325,7 +496,7 @@ export class HeartbeatManager {
       return;
     }
 
-    const events = this.listEvents();
+    const events = await this.listEvents();
     if (events.length === 0) {
       this.logger.info("No heartbeat events found — scheduler idle");
     }
@@ -348,56 +519,21 @@ export class HeartbeatManager {
       this.cycleInProgress = true;
 
       try {
-        const currentEvents = this.listEvents();
+        const currentEvents = await this.listEvents();
         if (currentEvents.length === 0) return;
 
         this.logger.debug({ count: currentEvents.length }, "Running heartbeat cycle");
 
         for (const event of currentEvents) {
           try {
-            this.logger.debug({ event: event.name }, `Executing heartbeat: ${event.name}`);
+            const notifyText = await this.runEventPipeline(event, sendFn);
 
-            // Load dedup state and inject into prompt if placeholder present
-            const useDedup = event.prompt.includes(DEDUP_PLACEHOLDER);
-            const state = useDedup ? this.loadState(event.name) : null;
-            const finalPrompt = state
-              ? this.injectDedupContext(event.prompt, state)
-              : event.prompt;
-
-            const response = await sendFn(finalPrompt);
-
-            if (response) {
-              // Extract and persist newly processed IDs if dedup is active
-              if (useDedup && state) {
-                const newIds = this.extractProcessedIds(response);
-                if (newIds.length > 0) {
-                  // Deduplicate against existing IDs before persisting
-                  const existing = new Set(state.processedIds);
-                  const uniqueNew = newIds.filter((id) => !existing.has(id));
-                  if (uniqueNew.length > 0) {
-                    state.processedIds.push(...uniqueNew);
-                    state.lastRun = new Date().toISOString();
-                    this.saveState(event.name, state);
-                    this.logger.info(
-                      { event: event.name, newIds: uniqueNew.length, totalIds: state.processedIds.length },
-                      `Dedup: recorded ${uniqueNew.length} new IDs for "${event.name}"`,
-                    );
-                  }
-                }
-              }
-
-              // Strip the PROCESSED marker from the message sent to the user
-              const cleanResponse = response.replace(PROCESSED_MARKER_RE, "").trim();
-              PROCESSED_MARKER_RE.lastIndex = 0;
-
-              if (cleanResponse) {
-                await notifyFn(event.name, cleanResponse);
-                this.logger.info({ event: event.name }, `Heartbeat "${event.name}" completed — notified user`);
-              } else {
-                this.logger.info({ event: event.name }, `Heartbeat "${event.name}" completed — nothing actionable, suppressed`);
-              }
+            // Notify user
+            if (notifyText) {
+              await notifyFn(event.name, notifyText);
+              this.logger.info({ event: event.name }, `Heartbeat "${event.name}" completed — notified user`);
             } else {
-              this.logger.warn({ event: event.name }, `Heartbeat "${event.name}" returned no response`);
+              this.logger.info({ event: event.name }, `Heartbeat "${event.name}" completed — nothing actionable, suppressed`);
             }
           } catch (err) {
             this.logger.error(

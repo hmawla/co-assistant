@@ -531,13 +531,149 @@ Environment variables can be injected into headers/env values using `${VAR_NAME}
 
 ## Heartbeat Events
 
-Heartbeats are scheduled AI prompts that run every N minutes. Use them for periodic checks like "do I have unread emails that need a reply?"
+Heartbeats are scheduled AI prompts that run every N minutes. Use them for periodic checks like "do I have unread emails that need a reply?" or "are there new PRs awaiting my review?"
+
+### Quick setup
 
 1. Set the interval in `.env`: `HEARTBEAT_INTERVAL_MINUTES=5`
 2. Add a heartbeat event: `co-assistant heartbeat add`
 3. Or trigger manually via Telegram: `/heartbeat`
 
-Heartbeat prompts are stored as `.heartbeat.md` files in the `heartbeats/` directory. They support deduplication via `{{DEDUP_STATE}}` placeholders and `<!-- PROCESSED: id1, id2 -->` markers.
+### Simple heartbeat
+
+The minimum setup is a single `.heartbeat.md` file in the `heartbeats/` directory:
+
+```
+heartbeats/
+└── morning-briefing.heartbeat.md
+```
+
+The file contains the prompt sent to the AI agent on each tick. The AI response is forwarded to you via Telegram.
+
+### Deduplication
+
+To avoid repeated notifications for the same items, add the `{{DEDUP_STATE}}` placeholder to your prompt and include a `<!-- PROCESSED: id1, id2 -->` marker in the AI's response:
+
+```markdown
+<!-- heartbeats/pr-review.heartbeat.md -->
+Check for open PRs awaiting my review. Already-notified PRs:
+{{DEDUP_STATE}}
+
+If there are new PRs, notify me and end your response with:
+<!-- PROCESSED: <pr_id1>, <pr_id2> -->
+```
+
+On subsequent runs, `{{DEDUP_STATE}}` is replaced with a list of IDs from previous `<!-- PROCESSED: ... -->` markers so the AI can skip already-reported items.
+
+> **Note:** `{{DEDUP_STATE}}` is designed for simple heartbeats without hooks. When using hooks, handle deduplication in your hooks instead: load state in `preAgentCall`, inject it into the prompt via `buildPrompt`, and save updated state in `postAgentCall`.
+
+### Hooks pipeline
+
+For heartbeats that need to fetch live data before calling the AI (e.g., querying an API), create a sibling `.heartbeat.hooks.mjs` file:
+
+```
+heartbeats/
+├── pr-review.heartbeat.md
+└── pr-review.heartbeat.hooks.mjs   ← auto-loaded when present
+```
+
+The hooks file exports up to three optional async functions forming a pipeline:
+
+```
+preAgentCall(state, context) → [optional: buildPrompt()] → AI agent call → [optional: postAgentCall()]
+```
+
+**`preAgentCall` receives two arguments:**
+- `state` — the persisted `HeartbeatState` (`{ processedIds, lastRun }`) loaded by the engine
+- `context` — an object provided by the engine with helpers:
+  - `context.callTool(pluginId, toolName, args)` — call any active plugin's tool directly (e.g. `gmail`, `google-calendar`) without going through the AI agent
+
+**Complete annotated example:**
+
+```js
+// heartbeats/pr-review.heartbeat.hooks.mjs
+
+/**
+ * Runs BEFORE the AI call. Fetch or prepare any data you need.
+ * Receives the persisted state and an engine context with `callTool`.
+ * Return null to abort the pipeline — the AI agent is NOT called.
+ */
+export async function preAgentCall(state, context) {
+  // Call a plugin tool directly — no AI token cost
+  const result = await context.callTool("github", "list_prs", { state: "open" });
+  if (typeof result === "string") return null; // plugin error → abort
+
+  const newPRs = result.prs.filter(pr => !state.processedIds.includes(pr.id));
+  if (newPRs.length === 0) return null; // nothing new → abort
+
+  return { processedIds: state.processedIds, prs: newPRs };
+}
+
+/**
+ * Optional. Build the final prompt from pre-fetched data + the base .heartbeat.md text.
+ * If omitted, use the {{PRE_AGENT_DATA}} placeholder in your .heartbeat.md instead.
+ */
+export async function buildPrompt(preData, basePrompt) {
+  const prList = preData.prs.map(pr => `- #${pr.number}: ${pr.title}`).join("\n");
+  return `${basePrompt}\n\nNew open PRs:\n${prList}`;
+}
+
+/**
+ * Optional. Post-process the AI response before it is sent to Telegram.
+ * Return { newState, response }:
+ *   - newState — persisted by the engine (null = don't update state)
+ *   - response — sent to Telegram (null = suppress notification)
+ */
+export async function postAgentCall(preData, agentResponse) {
+  const merged = [...new Set([...preData.processedIds, ...preData.prs.map(pr => pr.id)])];
+  return {
+    newState: { processedIds: merged, lastRun: new Date().toISOString() },
+    response: agentResponse || null,
+  };
+}
+```
+
+**When to use each hook:**
+
+| Hook | Use when… |
+|---|---|
+| `preAgentCall` | You need live data (plugin tool calls, DB queries) before the AI runs |
+| `preAgentCall` returns `null` | Skip the AI call entirely when there's nothing to process |
+| `buildPrompt` | You want full control over the final prompt structure |
+| `postAgentCall` | You need to filter, transform, persist state, or suppress the response |
+
+All three hooks are optional — only export the ones you need.
+
+### `context.callTool` — calling plugin tools from hooks
+
+`context.callTool(pluginId, toolName, args)` lets hooks call any active plugin's tools directly, without burning AI tokens. Returns the tool's result (an object) or an error string.
+
+```js
+// Call gmail plugin's search_threads tool
+const result = await context.callTool("gmail", "search_threads", {
+  query: "in:inbox",
+  maxThreads: 10,
+});
+if (typeof result === "string") return null; // handle error
+```
+
+Use this to pre-filter data in `preAgentCall` so the AI only sees what genuinely needs attention.
+
+### `{{PRE_AGENT_DATA}}` placeholder
+
+As a simpler alternative to `buildPrompt`, add `{{PRE_AGENT_DATA}}` directly in your `.heartbeat.md`. It is replaced with the JSON-serialised output of `preAgentCall()` automatically:
+
+```markdown
+<!-- heartbeats/pr-review.heartbeat.md -->
+Here are the current open PRs (JSON):
+{{PRE_AGENT_DATA}}
+
+Notify me of any PRs that have been waiting more than 24 hours.
+```
+
+### Backward compatibility
+
+Heartbeats without a hooks file work exactly as before. `{{DEDUP_STATE}}` and `<!-- PROCESSED: ... -->` deduplication markers are fully preserved and unaffected by the new hooks system.
 
 ---
 
